@@ -1,5 +1,5 @@
 ---
-title: Code Review Environment
+Title: Code Review Environment
 emoji: 🔍
 colorFrom: blue
 colorTo: green
