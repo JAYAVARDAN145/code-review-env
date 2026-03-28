@@ -33,11 +33,12 @@ def run_task(task_level: str) -> float:
 
     score = 0.0
     for attempt in range(3):
-        response = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": f"""
+        try:
+            response = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": f"""
 Review this {obs['language']} code:
 
 {obs['code']}
@@ -46,12 +47,15 @@ Task: {obs['task_description']}
 
 Provide a detailed code review identifying all issues.
 """}
-            ],
-            max_tokens=500,
-            temperature=0.2,
-        )
+                ],
+                max_tokens=500,
+                temperature=0.2,
+            )
+            review_text = response.choices[0].message.content
+        except Exception as e:
+            print(f"Error calling OpenAI API: {e}")
+            review_text = "" # Fallback to an empty review
 
-        review_text = response.choices[0].message.content
         print(f"\nAttempt {attempt + 1}:\n{review_text[:200]}...")
 
         result = env.step(

@@ -18,6 +18,7 @@ print(result)
         "language": "python",
         "task_description": "Find the syntax or runtime error in this code.",
         "expected_keywords": ["division", "zero", "empty", "ZeroDivisionError"],
+        "expected_line": 5,
     },
     "medium": {
         "code": """
@@ -89,11 +90,22 @@ class CodeReviewEnvironment:
         review_lower = action.review.lower()
 
         # Score based on how many expected keywords are found
-        matched = sum(
+        keyword_score = sum(
             1 for kw in task["expected_keywords"]
             if kw.lower() in review_lower
         )
-        self._score = round(matched / len(task["expected_keywords"]), 2)
+        keyword_score = keyword_score / len(task["expected_keywords"])
+
+        # Bonus for identifying the correct line number
+        line_bonus = 0
+        if "expected_line" in task and action.line_number is not None:
+            # Give a bonus if the line number is within 1 line of the expected line
+            if abs(action.line_number - task["expected_line"]) <= 1:
+                line_bonus = 0.1
+
+        self._score = round(keyword_score + line_bonus, 2)
+        if self._score > 1.0:
+            self._score = 1.0
 
         # End episode after 3 attempts or perfect score
         if self._step_count >= 3 or self._score == 1.0:

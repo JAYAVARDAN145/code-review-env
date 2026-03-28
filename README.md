@@ -54,7 +54,7 @@ uvicorn server.app:app --host 0.0.0.0 --port 7860
 
 ### Docker
 ```bash
-docker build -t code-review-env -f server/Dockerfile .
+docker build -t code-review-env .
 docker run -p 7860:7860 code-review-env
 ```
 
