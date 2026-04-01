@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from models import CodeReviewAction, CodeReviewObservation, CodeReviewState
 from server.environment import CodeReviewEnvironment
+import uvicorn
 
 app = FastAPI(title="Code Review Environment")
 env = CodeReviewEnvironment()
@@ -37,3 +38,9 @@ def step(action: CodeReviewAction):
 @app.get("/state")
 def state() -> CodeReviewState:
     return env.state
+
+def main():
+    uvicorn.run("server.app:app", host="0.0.0.0", port=7860)
+
+if __name__ == "__main__":
+    main()

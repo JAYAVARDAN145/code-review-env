@@ -17,6 +17,9 @@ dependencies = [
     "python-dotenv>=1.0.0",
 ]
 
+[project.scripts]
+server = "server.app:main"
+
 [build-system]
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.backends.legacy:build"
