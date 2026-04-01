@@ -8,12 +8,7 @@ WORKDIR /app
 
 COPY --chown=user . /app
 
-RUN pip install --no-cache-dir \
-    fastapi \
-    uvicorn \
-    pydantic \
-    openenv-core \
-    fastmcp
+RUN pip install --no-cache-dir -r requirements.txt
 
 EXPOSE 7860
 
