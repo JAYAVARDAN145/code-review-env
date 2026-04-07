@@ -1,90 +1,175 @@
 """
-Inference Script - Code Review Environment
-- API_BASE_URL: The API endpoint for the LLM
-- MODEL_NAME: The model identifier to use for inference
-- HF_TOKEN: Your Hugging Face API key
+inference.py — OpenEnv Hackathon baseline agent
+Repo: https://github.com/JAYAVARDAN145/code-review-env
+HF Space: https://huggingface.co/spaces/Jayavardan/code-review-env
+
+Prints the required structured output blocks to stdout:
+  [START] task=<name>
+  [STEP]  step=<n> reward=<r>
+  [END]   task=<name> score=<total> steps=<n>
 """
 
 import os
+import sys
+import json
+import argparse
+import requests
 from openai import OpenAI
-from client import CodeReviewClient
 
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
-MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Llama-3.3-70B-Instruct")
-ENV_URL = os.getenv("ENV_URL", "https://Jayavardan-code-review-env.hf.space")
+# ── Config ────────────────────────────────────────────────────────────────────
+DEFAULT_URL  = "https://Jayavardan-code-review-env.hf.space"
+TASKS        = ["easy", "medium", "hard"]
+MODEL        = "gpt-4o-mini"           # cheap + fast; swap for gpt-4o if you want
 
-client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
-env = CodeReviewClient(base_url=ENV_URL)
+client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
-SYSTEM_PROMPT = """You are an expert code reviewer.
-Review the given code and identify all issues including:
-- Runtime errors and exceptions
-- Logic bugs and incorrect behavior
-- Security vulnerabilities
-- Performance problems
-Be specific and mention exact error types like ZeroDivisionError, SQL injection etc."""
+# ── OpenEnv HTTP helpers ───────────────────────────────────────────────────────
+def reset(base_url: str, task_id: str) -> dict:
+    r = requests.post(
+        f"{base_url}/reset",
+        json={"task_id": task_id},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()
 
-def run_task(task_level: str) -> float:
-    print(f"\n--- Task: {task_level.upper()} ---")
-    obs = env.reset(task_level=task_level)
-    print(f"Code:\n{obs['code']}")
-    print(f"Task: {obs['task_description']}")
+def step(base_url: str, action: dict) -> dict:
+    r = requests.post(
+        f"{base_url}/step",
+        json={"action": action},
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()
 
-    score = 0.0
-    for attempt in range(3):
-        try:
-            response = client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": f"""
-Review this {obs['language']} code:
+# ── LLM agent ─────────────────────────────────────────────────────────────────
+def build_prompt(observation: dict) -> str:
+    """Convert the observation dict into a plain-English prompt for the LLM."""
+    obs_text = json.dumps(observation, indent=2)
+    return f"""You are an expert code reviewer.
 
-{obs['code']}
+Here is the current environment observation:
+{obs_text}
 
-Task: {obs['task_description']}
+Respond with a JSON object containing your review action.
+The action must match the action schema for this environment.
+Return ONLY valid JSON, nothing else."""
 
-Provide a detailed code review identifying all issues.
-"""}
-                ],
-                max_tokens=500,
-                temperature=0.2,
-            )
-            review_text = response.choices[0].message.content
-        except Exception as e:
-            print(f"Error calling OpenAI API: {e}")
-            review_text = "" # Fallback to an empty review
 
-        print(f"\nAttempt {attempt + 1}:\n{review_text[:200]}...")
+def llm_action(observation: dict, action_schema: dict) -> dict:
+    """Ask GPT to produce an action given the current observation."""
+    prompt = build_prompt(observation)
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"},
+        temperature=0.2,
+    )
+    raw = response.choices[0].message.content.strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        # Fallback: return a minimal safe action
+        return {"review": "no issues found", "severity": "low", "confidence": 0.5}
 
-        result = env.step(
-            review=review_text,
-            severity="high",
-        )
 
-        score = result["reward"]
-        done = result["done"]
-        print(f"Score: {score}, Done: {done}")
+def get_action_schema(base_url: str) -> dict:
+    """Fetch the action schema from the /tasks endpoint."""
+    try:
+        r = requests.get(f"{base_url}/tasks", timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        return data.get("action_schema", {})
+    except Exception:
+        return {}
 
-        if done:
+
+# ── Main episode runner ────────────────────────────────────────────────────────
+def run_task(base_url: str, task_id: str) -> float:
+    """
+    Run one complete episode for the given task.
+    Prints [START], one [STEP] per step, and [END] to stdout.
+    Returns total episode reward.
+    """
+    # ── [START] ────────────────────────────────────────────────────────────────
+    print(f"[START] task={task_id}", flush=True)
+
+    action_schema = get_action_schema(base_url)
+
+    # Reset the environment
+    reset_result = reset(base_url, task_id)
+    observation  = reset_result.get("observation", reset_result)
+
+    total_reward = 0.0
+    step_num     = 0
+    done         = False
+
+    while not done:
+        step_num += 1
+
+        # Agent picks an action
+        action = llm_action(observation, action_schema)
+
+        # Send action to environment
+        step_result = step(base_url, action)
+
+        reward      = float(step_result.get("reward", 0.0))
+        done        = bool(step_result.get("done", True))
+        observation = step_result.get("observation", {})
+        total_reward += reward
+
+        # ── [STEP] ─────────────────────────────────────────────────────────────
+        print(f"[STEP] step={step_num} reward={reward:.4f}", flush=True)
+
+        # Safety cap: never loop more than 50 steps
+        if step_num >= 50:
             break
+
+    # Normalise score to [0, 1]
+    score = max(0.0, min(1.0, total_reward))
+
+    # ── [END] ──────────────────────────────────────────────────────────────────
+    print(f"[END] task={task_id} score={score:.4f} steps={step_num}", flush=True)
 
     return score
 
+
+# ── Entry point ───────────────────────────────────────────────────────────────
 def main():
-    print("=== Code Review Environment Baseline ===")
-    scores = {}
+    parser = argparse.ArgumentParser(description="Code Review Env — baseline inference")
+    parser.add_argument(
+        "--url",
+        default=DEFAULT_URL,
+        help="Base URL of your deployed HF Space (no trailing slash)",
+    )
+    parser.add_argument(
+        "--tasks",
+        nargs="+",
+        default=TASKS,
+        choices=TASKS,
+        help="Which tasks to run (default: all three)",
+    )
+    args = parser.parse_args()
 
-    for level in ["easy", "medium", "hard"]:
-        scores[level] = run_task(level)
+    base_url = args.url.rstrip("/")
+    results  = {}
 
-    print("\n=== Final Scores ===")
-    for level, score in scores.items():
-        print(f"{level.upper()}: {score:.2f}")
+    for task_id in args.tasks:
+        try:
+            score = run_task(base_url, task_id)
+            results[task_id] = score
+        except Exception as e:
+            # Still print [END] with score=0 so the validator sees the block
+            print(f"[END] task={task_id} score=0.0000 steps=0", flush=True)
+            print(f"ERROR running task {task_id}: {e}", file=sys.stderr, flush=True)
+            results[task_id] = 0.0
 
-    avg = sum(scores.values()) / len(scores)
-    print(f"AVERAGE: {avg:.2f}")
+    # Summary (not parsed by validator, just useful for you)
+    print("\n=== Baseline Results ===", flush=True)
+    for task_id, score in results.items():
+        print(f"  {task_id:8s}: {score:.4f}", flush=True)
+    print(f"  average : {sum(results.values()) / len(results):.4f}", flush=True)
+
 
 if __name__ == "__main__":
     main()
